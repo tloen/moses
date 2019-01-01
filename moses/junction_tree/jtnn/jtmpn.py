@@ -85,7 +85,7 @@ class JTMPN(nn.Module):
         total_bonds = len(all_bonds)
         total_mess = len(all_mess)
         fatoms = torch.stack(fatoms, 0)
-        fbonds = torch.stack(fbonds, 0).to(device=device)
+        fbonds = torch.stack(fbonds, 0).to(device=device) if len(fbonds) != 0 else torch.zeros([0, 40]).to(device=device)
         agraph = torch.zeros(total_atoms, MAX_NB, dtype=torch.long, device=device)
         bgraph = torch.zeros(total_bonds, MAX_NB, dtype=torch.long, device=device)
         tree_message = torch.stack(all_mess, dim=0)
