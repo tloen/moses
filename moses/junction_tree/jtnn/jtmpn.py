@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 
 from .nnutils import index_select_nd
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 
 ELEM_LIST = ['C', 'N', 'O', 'S', 'F', 'Si',
              'P', 'Cl', 'Br', 'Mg', 'Na', 'Ca',
@@ -39,45 +39,51 @@ class JTMPN(nn.Module):
         scope = []
 
         for e, vec in tree_mess.items():
-            mess_dict[e] = len(all_mess)
-            all_mess.append(vec)
+            mess_dict[e] = len(all_mess) # index into all_mess
+            all_mess.append(vec) # holds messages
+
+        bonds_between_nodes = defaultdict(list) #[defaultdict(list) for c in cand_batch]
 
         for mol, all_nodes, ctr_node in cand_batch:
             n_atoms = mol.GetNumAtoms()
 
-            for atom in mol.GetAtoms():
+            for atom in mol.GetAtoms(): # compile atom features in fatoms
                 fatoms.append(atom_features(atom, device))
-                in_bonds.append([])
+                in_bonds.append([]) # set up length of in_bonds
 
             for bond in mol.GetBonds():
                 a1 = bond.GetBeginAtom()
                 a2 = bond.GetEndAtom()
-                x = a1.GetIdx() + total_atoms
+                x = a1.GetIdx() + total_atoms # note that indices are shifted by atom total
                 y = a2.GetIdx() + total_atoms
 
                 x_nid, y_nid = a1.GetAtomMapNum(), a2.GetAtomMapNum()
-                x_bid = all_nodes[x_nid - 1].idx if x_nid > 0 else -1
-                y_bid = all_nodes[y_nid - 1].idx if y_nid > 0 else -1
+                x_bid = all_nodes[x_nid - 1].idx if x_nid > 0 else -1 # which node?
+                y_bid = all_nodes[y_nid - 1].idx if y_nid > 0 else -1 # which node?
 
                 bfeature = bond_features(bond, device)
 
                 b = len(all_mess) + len(all_bonds)
                 all_bonds.append((x, y))
+                b1 = len(all_bonds) - 1
                 fbonds.append(torch.cat([fatoms[x], bfeature], 0))
                 in_bonds[y].append(b)
 
                 b = len(all_mess) + len(all_bonds)
                 all_bonds.append((y, x))
+                b2 = len(all_bonds) - 1
                 fbonds.append(torch.cat([fatoms[y], bfeature], 0))
                 in_bonds[x].append(b)
 
-                if 0 <= x_bid != y_bid >= 0:
+                if 0 <= x_bid != y_bid >= 0: # if x and y are in different nodes
                     if (x_bid, y_bid) in mess_dict:
                         mess_idx = mess_dict[(x_bid, y_bid)]
-                        in_bonds[y].append(mess_idx)
+                        in_bonds[y].append(mess_idx) # message vector into y
+                        bonds_between_nodes[(x_bid, y_bid)].append(b1)
                     if (y_bid, x_bid) in mess_dict:
                         mess_idx = mess_dict[(y_bid, x_bid)]
-                        in_bonds[x].append(mess_idx)
+                        in_bonds[x].append(mess_idx) # message vector into x
+                        bonds_between_nodes[(y_bid, x_bid)].append(b2)
 
             scope.append((total_atoms, n_atoms))
             total_atoms += n_atoms
@@ -94,10 +100,11 @@ class JTMPN(nn.Module):
             for i, b in enumerate(in_bonds[a]):
                 agraph[a, i] = b
 
+        # bgraph[bond index, i] = i-th 
         for b1 in range(total_bonds):
             x, y = all_bonds[b1]
-            for i, b2 in enumerate(in_bonds[x]):
-                if b2 < total_mess or all_bonds[b2 - total_mess][0] != y:
+            for i, b2 in enumerate(in_bonds[x]): # connections from other nodes: i, i-th index into all_mess
+                if b2 < total_mess or all_bonds[b2 - total_mess][0] != y: # ignore y unless  
                     bgraph[b1, i] = b2
 
         binput = self.W_i(fbonds)
@@ -109,6 +116,15 @@ class JTMPN(nn.Module):
             nei_message = nei_message.sum(dim=1)
             nei_message = self.W_h(nei_message)
             graph_message = nn.ReLU()(binput + nei_message)
+
+        collated = {
+          k: graph_message.index_select(
+            0,
+            torch.Tensor(v).to(device=device).long()
+          ).mean(0) for k, v in bonds_between_nodes.items()
+        }
+        import pdb; pdb.set_trace(); 
+        # print(collated.keys())
 
         message = torch.cat([tree_message, graph_message], dim=0)
         nei_message = index_select_nd(message, 0, agraph)
@@ -122,7 +138,7 @@ class JTMPN(nn.Module):
             mol_vecs.append(mol_vec)
 
         mol_vecs = torch.stack(mol_vecs, dim=0)
-        return mol_vecs
+        return mol_vecs, collated
 
 
 def onek_encoding_unk(x, allowable_set):
