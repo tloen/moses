@@ -12,6 +12,7 @@ from .jtnn_enc import JTNNEncoder
 from .mol_tree import MolTree
 from .mpn import MPN, mol2graph
 
+NUM_BP_LOOPS = 5
 
 def set_batch_node_id(mol_batch, vocab):
     tot = 0
@@ -206,13 +207,18 @@ class JTNNVAE(nn.Module):
                 set_atommap(node.mol, node.nid)
 
         tree_mess = self.jtnn([pred_root])[0]
+        tree_mess = { k: v[:] for k, v in tree_mess.items() } # just in case
 
         cur_mol = copy_edit_mol(pred_root.mol)
         global_amap = [OrderedDict()] + [OrderedDict() for _ in pred_nodes]
         global_amap[1] = OrderedDict([(atom.GetIdx(), atom.GetIdx()) for atom in cur_mol.GetAtoms()])
 
-        cur_mol, tree_updates = self.dfs_assemble(tree_mess, mol_vec, pred_nodes, cur_mol, global_amap, [], pred_root, None,
+        for i in range(NUM_BP_LOOPS):
+            new_mol, tree_updates = self.dfs_assemble(tree_mess, mol_vec, pred_nodes, cur_mol, global_amap, [], pred_root, None,
                                     prob_decode)
+            tree_mess.update(tree_updates)
+        cur_mol = new_mol
+
         if cur_mol is None:
             return None
 
@@ -294,8 +300,6 @@ class JTNNVAE(nn.Module):
                     result = False
                     break
             if result:
-                print(tree_updates)
                 return cur_mol, tree_updates
 
-        print(tree_updates)
         return None, tree_updates
