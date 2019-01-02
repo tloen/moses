@@ -211,7 +211,7 @@ class JTNNVAE(nn.Module):
         global_amap = [OrderedDict()] + [OrderedDict() for _ in pred_nodes]
         global_amap[1] = OrderedDict([(atom.GetIdx(), atom.GetIdx()) for atom in cur_mol.GetAtoms()])
 
-        cur_mol = self.dfs_assemble(tree_mess, mol_vec, pred_nodes, cur_mol, global_amap, [], pred_root, None,
+        cur_mol, tree_updates = self.dfs_assemble(tree_mess, mol_vec, pred_nodes, cur_mol, global_amap, [], pred_root, None,
                                     prob_decode)
         if cur_mol is None:
             return None
@@ -251,7 +251,10 @@ class JTNNVAE(nn.Module):
 
         cands = [(candmol, all_nodes, cur_node) for candmol in cand_mols]
 
-        cand_vecs = self.jtmpn(cands, tree_mess)
+        tree_updates = {}
+
+        cand_vecs, sub_updates = self.jtmpn(cands, tree_mess)
+        tree_updates.update(sub_updates)
         cand_vecs = self.G_mean(cand_vecs)
         mol_vec = mol_vec.squeeze()
         scores = torch.mv(cand_vecs, mol_vec) * 20
@@ -284,12 +287,15 @@ class JTNNVAE(nn.Module):
             for nei_node in children:
                 if nei_node.is_leaf:
                     continue
-                cur_mol = self.dfs_assemble(tree_mess, mol_vec, all_nodes, cur_mol, new_global_amap, pred_amap,
+                cur_mol, tree_subdates = self.dfs_assemble(tree_mess, mol_vec, all_nodes, cur_mol, new_global_amap, pred_amap,
                                             nei_node, cur_node, prob_decode)
+                tree_updates.update(tree_subdates)
                 if cur_mol is None:
                     result = False
                     break
             if result:
-                return cur_mol
+                print(tree_updates)
+                return cur_mol, tree_updates
 
-        return None
+        print(tree_updates)
+        return None, tree_updates
