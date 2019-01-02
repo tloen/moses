@@ -102,7 +102,10 @@ class JTNNVAE(nn.Module):
                 cands.extend([(cand, mol_tree.nodes, node) for cand in node.cand_mols])
                 batch_idx.extend([i] * len(node.cands))
 
-        cand_vec = self.jtmpn(cands, tree_mess)
+        tree_mess = { k: v[:] for k, v in tree_mess.items() }
+        for i in range(NUM_BP_LOOPS):
+            cand_vec, tree_update = self.jtmpn(cands, tree_mess)
+            tree_mess.update(tree_update)
         cand_vec = self.G_mean(cand_vec)
 
         batch_idx = torch.tensor(batch_idx, dtype=torch.long, device=device)
